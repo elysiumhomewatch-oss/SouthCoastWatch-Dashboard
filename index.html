@@ -25,135 +25,133 @@
   </div>
 
   <script>
-    // === Initialize Map ===
-    const map = L.map('map').setView([-30.85, 30.35], 12); // Center on South Coast approx
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-    }).addTo(map);
+  // === Zone fallback centers (add more as needed) ===
+  const zoneCenters = {
+    "Highway West": [-30.464248, 30.637618],
+    "River North": [-30.82, 30.38],
+    "River South": [-30.88, 30.32],
+    "Sea East": [-30.90, 30.45],
+    "Central": [-30.85, 30.35],
+    "Unknown": [-30.85, 30.35]
+    // Add your other zones here
+  };
 
-    // === Zone fallback centers (add more as needed) ===
-    const zoneCenters = {
-      "Highway West": [-30.464248, 30.637618],
-      "River North": [-30.82, 30.38],
-      "River South": [-30.88, 30.32],
-      "Sea East": [-30.90, 30.45],
-      "Central": [-30.85, 30.35]
-      // Add your other zones here
-    };
+  // === Initialize Map ===
+  const map = L.map('map').setView([-30.85, 30.35], 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+  }).addTo(map);
 
-    // === Load data from your public Sheet JSON feed ===
-    const SHEET_ID = "1Bi9g1mnhkHFqqvNhIwQkikJ2gDkJx5xk5jheyu0kAE4"; // ← YOUR SHEET ID HERE
-    const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=Form%20Responses%201&tq=SELECT%20*%20WHERE%20Col6%20IS%20NOT%20NULL%20LIMIT%2010`;
+  // === Load data from your public Sheet JSON feed ===
+  const SHEET_ID = "1Bi9g1mnhkHFqqvNhIwQkikJ2gDkJx5xk5jheyu0kAE4"; // ← YOUR SHEET ID HERE
+  const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=Form%20Responses%201`;
 
-    fetch(url)
-  .then(response => {
-    if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
-    return response.text();
-  })
-  .then(text => {
-    // Remove the /*O_o*/ prefix if present, then remove the function wrapper
-    let cleaned = text
-      .replace(/^\/\*(.|\n)*?\*\//, '')          // Remove any leading /* ... */ comment block
-      .trim()
-      .replace(/^google\.visualization\.Query\.setResponse\(/, '')
-      .replace(/\);?$/, '');                     // Remove trailing ); or ;
+  fetch(url)
+    .then(response => {
+      if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+      return response.text();
+    })
+    .then(text => {
+      // Clean Google's JSONP wrapper and any leading comment
+      let cleaned = text
+        .replace(/^\/\*(.|\n)*?\*\//, '')     // Remove /*O_o*/ or similar prefix
+        .trim()
+        .replace(/^google\.visualization\.Query\.setResponse\(/, '')
+        .replace(/\);?$/, '');               // Remove trailing );
 
-    // Safety check: if still starts with / or looks wrong, log it
-    if (cleaned.startsWith('/') || cleaned.startsWith('<')) {
-      throw new Error('Response still not clean JSON: ' + cleaned.substring(0, 100));
-    }
-
-    const data = JSON.parse(cleaned);
-    const rows = data.table.rows || [];
-
-    // === YOUR EXISTING PROCESSING CODE GOES HERE (do NOT delete this part) ===
-    rows.forEach(row => {
-      const cells = row.c || [];
-      const timestamp = cells[0]?.v || '';
-      const reporter = cells[1]?.v || 'Anonymous';
-      const zone = cells[3]?.v || 'Unknown';
-      const spotDesc = cells[4]?.v || '';
-      const combinedCoords = cells[5]?.v || ''; // Your F column
-      const alertType = cells[6]?.v || '';
-      const details = cells[7]?.v || '';
-      const photo = cells[8]?.v || '';
-      const notes = cells[9]?.v || '';
-
-      // Parse lat/lng from combined string
-      let lat = null, lng = null;
-      if (combinedCoords && combinedCoords.includes(',')) {
-        const parts = combinedCoords.split(',').map(s => parseFloat(s.trim()));
-        if (!isNaN(parts[0]) && !isNaN(parts[1])) {
-          lat = parts[0];
-          lng = parts[1];
-        }
+      if (cleaned.startsWith('/') || cleaned.startsWith('<')) {
+        throw new Error('Response not clean JSON: ' + cleaned.substring(0, 100));
       }
 
-      // Fallback to zone center if no valid coords
-      if (lat === null || lng === null) {
-        const center = zoneCenters[zone] || [-30.85, 30.35];
-        lat = center[0];
-        lng = center[1];
-      }
+      const data = JSON.parse(cleaned);
+      const rows = data.table.rows || [];
 
-      // Add marker
-      const marker = L.marker([lat, lng]).addTo(map);
-      const popupText = `
-        <b>${alertType} - ${zone}</b><br>
-        ${spotDesc}<br>
-        ${details.substring(0, 150)}${details.length > 150 ? '...' : ''}<br>
-        Reported: ${timestamp}<br>
-        By: ${reporter}<br>
-        ${photo ? `<a href="${photo}" target="_blank">View Photo</a>` : ''}
-      `;
-      marker.bindPopup(popupText);
+      // Process rows
+      rows.forEach(row => {
+        const cells = row.c || [];
+        const timestamp = cells[0]?.v || '';
+        const reporter = cells[1]?.v || 'Anonymous';
+        const zone = cells[3]?.v || 'Unknown';
+        const spotDesc = cells[4]?.v || '';
+        const combinedCoords = cells[5]?.v || ''; // Your F column
+        const alertType = cells[6]?.v || '';
+        const details = cells[7]?.v || '';
+        const photo = cells[8]?.v || '';
+        const notes = cells[9]?.v || '';
 
-      // Add to alerts list below map
-      const card = document.createElement('div');
-      card.className = 'alert-card';
-      card.innerHTML = `
-        <div class="alert-title">${alertType} in ${zone}</div>
-        <div class="alert-meta">Reported ${timestamp} by ${reporter}</div>
-        <p>${details}</p>
-        ${spotDesc ? `<p><i>Location: ${spotDesc}</i></p>` : ''}
-        ${photo ? `<p><a href="${photo}" target="_blank">Photo</a></p>` : ''}
-      `;
-      document.getElementById('alert-list').appendChild(card);
-    });
-
-    // Zoom to fit all markers if any
-    if (rows.length > 0) {
-      const group = L.featureGroup(rows.map(r => {
-        const cells = r.c || [];
-        const combined = cells[5]?.v || '';
+        // Parse lat/lng from combined string
         let lat = null, lng = null;
-        if (combined && combined.includes(',')) {
-          const parts = combined.split(',').map(s => parseFloat(s.trim()));
+        if (combinedCoords && combinedCoords.includes(',')) {
+          const parts = combinedCoords.split(',').map(s => parseFloat(s.trim()));
           if (!isNaN(parts[0]) && !isNaN(parts[1])) {
             lat = parts[0];
             lng = parts[1];
           }
         }
+
+        // Fallback to zone center if no valid coords
         if (lat === null || lng === null) {
-          const zone = cells[3]?.v || 'Unknown';
           const center = zoneCenters[zone] || [-30.85, 30.35];
           lat = center[0];
           lng = center[1];
         }
-        return L.marker([lat, lng]);
-      }));
-      map.fitBounds(group.getBounds());
-    }
-  })
-  .catch(err => {
-    console.error('Error loading Sheet data:', err);
-    document.getElementById('alert-list').innerHTML =
-      '<p style="color:red; text-align:center;">Error loading alerts: ' + err.message + '<br>Check console or Sheet publish settings.</p>';
-  });
-      .catch(err => {
-        console.error('Error loading Sheet data:', err);
-        document.getElementById('alert-list').innerHTML = '<p style="color:red;">Error loading alerts — check console.</p>';
+
+        // Add marker
+        const marker = L.marker([lat, lng]).addTo(map);
+        const popupText = `
+          <b>${alertType} - ${zone}</b><br>
+          ${spotDesc}<br>
+          ${details.substring(0, 150)}${details.length > 150 ? '...' : ''}<br>
+          Reported: ${timestamp}<br>
+          By: ${reporter}<br>
+          ${photo ? `<a href="${photo}" target="_blank">View Photo</a>` : ''}
+        `;
+        marker.bindPopup(popupText);
+
+        // Add to alerts list below map
+        const card = document.createElement('div');
+        card.className = 'alert-card';
+        card.innerHTML = `
+          <div class="alert-title">${alertType} in ${zone}</div>
+          <div class="alert-meta">Reported ${timestamp} by ${reporter}</div>
+          <p>${details}</p>
+          ${spotDesc ? `<p><i>Location: ${spotDesc}</i></p>` : ''}
+          ${photo ? `<p><a href="${photo}" target="_blank">Photo</a></p>` : ''}
+        `;
+        document.getElementById('alert-list').appendChild(card);
       });
-  </script>
+
+      // Zoom to fit all markers if any
+      if (rows.length > 0) {
+        const markers = rows.map(row => {
+          const cells = row.c || [];
+          let lat = null, lng = null;
+          const combined = cells[5]?.v || '';
+          if (combined && combined.includes(',')) {
+            const parts = combined.split(',').map(s => parseFloat(s.trim()));
+            if (!isNaN(parts[0]) && !isNaN(parts[1])) {
+              lat = parts[0];
+              lng = parts[1];
+            }
+          }
+          if (lat === null || lng === null) {
+            const zone = cells[3]?.v || 'Unknown';
+            const center = zoneCenters[zone] || [-30.85, 30.35];
+            lat = center[0];
+            lng = center[1];
+          }
+          return L.marker([lat, lng]);
+        });
+
+        const group = L.featureGroup(markers);
+        map.fitBounds(group.getBounds());
+      }
+    })
+    .catch(err => {
+      console.error('Error loading Sheet data:', err);
+      document.getElementById('alert-list').innerHTML =
+        '<p style="color:red; text-align:center;">Error loading alerts: ' + err.message + '<br>Check console or Sheet publish settings.</p>';
+    });
+</script>
 </body>
 </html>
