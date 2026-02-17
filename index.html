@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <title>CoastLink Community Dashboard v2.1</title>
+  <title>CoastLink Community Dashboard v2.2</title>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -25,117 +25,125 @@
   </div>
 
   <script>
-    const zoneCenters = {
-      "Highway West": [-30.464248, 30.637618],
-      "River North": [-30.82, 30.38],
-      "River South": [-30.88, 30.32],
-      "Sea East": [-30.90, 30.45],
-      "Central": [-30.85, 30.35],
-      "Unknown": [-30.85, 30.35]
-    };
+  // === Zone fallback centers (expand with your actual zones) ===
+  const zoneCenters = {
+    "Highway West": [-30.464248, 30.637618],
+    "Sea East": [-30.90, 30.45],
+    "River North": [-30.82, 30.38],
+    "River South": [-30.88, 30.32],
+    "Central": [-30.85, 30.35],
+    "Unknown": [-30.85, 30.35]
+    // Add more zones here as needed
+  };
 
-    const map = L.map('map').setView([-30.85, 30.35], 12);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-    }).addTo(map);
+  // === Initialize the map ===
+  const map = L.map('map').setView([-30.85, 30.35], 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+  }).addTo(map);
 
-    const SHEET_ID = "1Bi9g1mnhkHFqqvNhIwQkikJ2gDkJx5xk5jheyu0kAE4";
-    const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=Form%20Responses%201`;
+  // === Your Sheet ID ===
+  const SHEET_ID = "1Bi9g1mnhkHFqqvNhIwQkikJ2gDkJx5xk5jheyu0kAE4";
 
-    fetch(url)
-      .then(response => {
-        if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
-        return response.text();
-      })
-      .then(text => {
-        let cleaned = text
-          .replace(/^\/\*(.|\n)*?\*\//, '') 
-          .trim()
-          .replace(/^google\.visualization\.Query\.setResponse\(/, '')
-          .replace(/\);?$/, '');
+  // === Feed URL (latest rows, ordered by timestamp descending) ===
+  const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=Form%20Responses%201&tq=SELECT%20*%20ORDER%20BY%20Col1%20DESC%20LIMIT%2020`;
 
-        if (cleaned.startsWith('/') || cleaned.startsWith('<')) {
-          throw new Error('Response not clean JSON: ' + cleaned.substring(0, 100));
+  fetch(url)
+    .then(response => {
+      if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+      return response.text();
+    })
+    .then(text => {
+      // Step 1: Remove leading comment block (/*O_o*/ or similar)
+      let cleaned = text.replace(/^\/\*(.|\n)*?\*\//, '').trim();
+
+      // Step 2: Remove the google.visualization function wrapper
+      cleaned = cleaned
+        .replace(/^google\.visualization\.Query\.setResponse\(/, '')
+        .replace(/\);?$/, '');
+
+      // Safety check
+      if (cleaned.startsWith('/') || cleaned.startsWith('<') || !cleaned.startsWith('{')) {
+        throw new Error('Cleaned response is not valid JSON: ' + cleaned.substring(0, 150));
+      }
+
+      const data = JSON.parse(cleaned);
+      const rows = data.table.rows || [];
+      console.log(`Loaded ${rows.length} rows from Sheet`);
+
+      const markers = []; // Collect for fitBounds
+
+      rows.forEach(row => {
+        const cells = row.c || [];
+
+        const timestamp = cells[0]?.v || '';
+        const reporter   = cells[1]?.v || 'Anonymous';
+        const zone       = cells[3]?.v || 'Unknown';
+        const spotDesc   = cells[4]?.v || '';
+        const combinedCoords = cells[5]?.v || ''; // <-- Your Latitude/Longitude column (F)
+        const alertType  = cells[6]?.v || '';
+        const details    = cells[7]?.v || '';
+        const photo      = cells[8]?.v || '';
+
+        // === Parse lat/lng from combined string ===
+        let lat = null, lng = null;
+        if (combinedCoords && combinedCoords.includes(',')) {
+          const parts = combinedCoords.split(',').map(s => parseFloat(s.trim()));
+          if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+            lat = parts[0];
+            lng = parts[1];
+            console.log(`Valid coords parsed: ${lat}, ${lng}`);
+          }
         }
 
-        const data = JSON.parse(cleaned);
-        const rows = data.table.rows || [];
-
-        rows.forEach(row => {
-          const cells = row.c || [];
-          const timestamp = cells[0]?.v || '';
-          const reporter = cells[1]?.v || 'Anonymous';
-          const zone = cells[3]?.v || 'Unknown';
-          const spotDesc = cells[4]?.v || '';
-          const combinedCoords = cells[5]?.v || '';
-          const alertType = cells[6]?.v || '';
-          const details = cells[7]?.v || '';
-          const photo = cells[8]?.v || '';
-
-          let lat = null, lng = null;
-          if (combinedCoords && combinedCoords.includes(',')) {
-            const parts = combinedCoords.split(',').map(s => parseFloat(s.trim()));
-            if (!isNaN(parts[0]) && !isNaN(parts[1])) {
-              lat = parts[0];
-              lng = parts[1];
-            }
-          }
-
-          if (lat === null || lng === null) {
-            const center = zoneCenters[zone] || [-30.85, 30.35];
-            lat = center[0];
-            lng = center[1];
-          }
-
-          const marker = L.marker([lat, lng]).addTo(map);
-          marker.bindPopup(`
-            <b>${alertType} - ${zone}</b><br>
-            ${spotDesc}<br>
-            ${details.substring(0, 150)}${details.length > 150 ? '...' : ''}<br>
-            Reported: ${timestamp}<br>
-            By: ${reporter}<br>
-            ${photo ? `<a href="${photo}" target="_blank">View Photo</a>` : ''}
-          `);
-
-          const card = document.createElement('div');
-          card.className = 'alert-card';
-          card.innerHTML = `
-            <div class="alert-title">${alertType} in ${zone}</div>
-            <div class="alert-meta">Reported ${timestamp} by ${reporter}</div>
-            <p>${details}</p>
-            ${spotDesc ? `<p><i>Location: ${spotDesc}</i></p>` : ''}
-            ${photo ? `<p><a href="${photo}" target="_blank">Photo</a></p>` : ''}
-          `;
-          document.getElementById('alert-list').appendChild(card);
-        });
-
-        if (rows.length > 0) {
-          const markers = rows.map(row => {
-            const cells = row.c || [];
-            let lat = null, lng = null;
-            const combined = cells[5]?.v || '';
-            if (combined && combined.includes(',')) {
-              const parts = combined.split(',').map(s => parseFloat(s.trim()));
-              if (!isNaN(parts[0]) && !isNaN(parts[1])) {
-                lat = parts[0];
-                lng = parts[1];
-              }
-            }
-            if (lat === null || lng === null) {
-              const zone = cells[3]?.v || 'Unknown';
-              const center = zoneCenters[zone] || [-30.85, 30.35];
-              lat = center[0];
-              lng = center[1];
-            }
-            return L.marker([lat, lng]);
-          });
-          const group = L.featureGroup(markers);
-          map.fitBounds(group.getBounds());
+        // === Fallback to zone center ===
+        if (lat === null || lng === null) {
+          const center = zoneCenters[zone] || [-30.85, 30.35];
+          lat = center[0];
+          lng = center[1];
+          console.log(`Using zone fallback for ${zone}: ${lat}, ${lng}`);
         }
-      })
-      .catch(err => {
-        console.error('Error loading Sheet data:', err);
-        document.getElementById('alert-list').innerHTML = 
-          '<p style="color:red; text-align:center;">Error loading alerts: ' + err.message + '<br>Check Sheet publish settings or console.</p>';
+
+        // === Create marker ===
+        const marker = L.marker([lat, lng]).addTo(map);
+        marker.bindPopup(`
+          <b>${alertType} - ${zone}</b><br>
+          ${spotDesc}<br>
+          ${details.substring(0, 150)}${details.length > 150 ? '...' : ''}<br>
+          Reported: ${timestamp}<br>
+          By: ${reporter}<br>
+          ${photo ? `<a href="${photo}" target="_blank">View Photo</a>` : ''}
+        `);
+        markers.push(marker);
+
+        // === Add card to list ===
+        const card = document.createElement('div');
+        card.className = 'alert-card';
+        card.innerHTML = `
+          <div class="alert-title">${alertType} in ${zone}</div>
+          <div class="alert-meta">Reported ${timestamp} by ${reporter}</div>
+          <p>${details}</p>
+          ${spotDesc ? `<p><i>Location: ${spotDesc}</i></p>` : ''}
+          ${photo ? `<p><a href="${photo}" target="_blank">Photo</a></p>` : ''}
+        `;
+        document.getElementById('alert-list').appendChild(card);
       });
-  </script>
+
+      // === Zoom to fit all markers ===
+      if (markers.length > 0) {
+        const group = L.featureGroup(markers);
+        map.fitBounds(group.getBounds(), { padding: [50, 50] });
+      } else {
+        console.log('No valid locations found to zoom to');
+      }
+    })
+    .catch(err => {
+      console.error('Error loading Sheet data:', err);
+      document.getElementById('alert-list').innerHTML = 
+        '<p style="color:red; text-align:center; padding:20px;">' +
+        'Error loading alerts: ' + err.message +
+        '<br>Check if the Sheet is published (File → Share → Publish to web) or look in console.</p>';
+    });
+</script>
+</body>
+</html>
