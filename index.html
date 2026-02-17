@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <title>CoastLink Community Dashboard v2.3</title>
+  <title>CoastLink Community Dashboard v2.4</title>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -36,7 +36,7 @@
     // Add more as needed, e.g. "Other": [-30.85, 30.35]
   };
 
-  // === Initialize Leaflet map ===
+  // === Initialize the map ===
   const map = L.map('map').setView([-30.85, 30.35], 12);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -45,8 +45,8 @@
   // === Your Google Sheet ID ===
   const SHEET_ID = "1Bi9g1mnhkHFqqvNhIwQkikJ2gDkJx5xk5jheyu0kAE4";
 
-  // === Public gviz feed URL (last 20 rows, newest first) ===
-  const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=Form%20Responses%201&tq=SELECT%20*%20ORDER%20BY%20Col1%20DESC%20LIMIT%2020`;
+  // === Public gviz feed URL (simplified, no tq query to avoid INVALID_QUERY error) ===
+  const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=Form%20Responses%201`;
 
   fetch(url)
     .then(response => {
@@ -61,7 +61,7 @@
         .replace(/^google\.visualization\.Query\.setResponse\(/, '')
         .replace(/\);?$/, '');               // Remove trailing );
 
-      // Safety check: make sure we have actual JSON now
+      // Safety check
       if (cleaned.startsWith('/') || cleaned.startsWith('<') || !cleaned.startsWith('{')) {
         throw new Error('Cleaned response is not valid JSON: ' + cleaned.substring(0, 150));
       }
@@ -157,7 +157,7 @@
         map.fitBounds(group.getBounds(), { padding: [50, 50] });
         console.log('Map zoomed to fit markers');
       } else {
-        console.log('No valid markers created – check row parsing');
+        console.log('No markers created – check row parsing');
       }
     })
     .catch(err => {
@@ -165,7 +165,7 @@
       document.getElementById('alert-list').innerHTML = 
         '<p style="color:red; text-align:center; padding:20px;">' +
         'Error loading alerts: ' + err.message +
-        '<br>Check Sheet publish settings (File → Share → Publish to web) or console logs.</p>';
+        '<br>Check if the Sheet is published (File → Share → Publish to web) or console logs.</p>';
     });
 </script>
 </body>
