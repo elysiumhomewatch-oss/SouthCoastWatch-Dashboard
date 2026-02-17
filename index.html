@@ -41,6 +41,8 @@
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
   }).addTo(map);
+    L.marker([-30.464248, 30.637618]).addTo(map)
+  .bindPopup('Hard-coded test marker – should always show');
 
   // === Your Sheet ID ===
   const SHEET_ID = "1Bi9g1mnhkHFqqvNhIwQkikJ2gDkJx5xk5jheyu0kAE4";
