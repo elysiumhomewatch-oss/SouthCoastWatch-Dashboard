@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <title>CoastLink Community Dashboard v2.2</title>
+  <title>CoastLink Community Dashboard v2.3</title>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -25,7 +25,7 @@
   </div>
 
   <script>
-  // === Zone fallback centers (expand with your actual zones) ===
+  // === Zone fallback centers (add all your zones here) ===
   const zoneCenters = {
     "Highway West": [-30.464248, 30.637618],
     "Sea East": [-30.90, 30.45],
@@ -33,21 +33,19 @@
     "River South": [-30.88, 30.32],
     "Central": [-30.85, 30.35],
     "Unknown": [-30.85, 30.35]
-    // Add more zones here as needed
+    // Add more as needed, e.g. "Other": [-30.85, 30.35]
   };
 
-  // === Initialize the map ===
+  // === Initialize Leaflet map ===
   const map = L.map('map').setView([-30.85, 30.35], 12);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
   }).addTo(map);
-    L.marker([-30.464248, 30.637618]).addTo(map)
-  .bindPopup('Hard-coded test marker – should always show');
 
-  // === Your Sheet ID ===
+  // === Your Google Sheet ID ===
   const SHEET_ID = "1Bi9g1mnhkHFqqvNhIwQkikJ2gDkJx5xk5jheyu0kAE4";
 
-  // === Feed URL (latest rows, ordered by timestamp descending) ===
+  // === Public gviz feed URL (last 20 rows, newest first) ===
   const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=Form%20Responses%201&tq=SELECT%20*%20ORDER%20BY%20Col1%20DESC%20LIMIT%2020`;
 
   fetch(url)
@@ -56,60 +54,79 @@
       return response.text();
     })
     .then(text => {
-      // Step 1: Remove leading comment block (/*O_o*/ or similar)
-      let cleaned = text.replace(/^\/\*(.|\n)*?\*\//, '').trim();
-
-      // Step 2: Remove the google.visualization function wrapper
-      cleaned = cleaned
+      // === Clean the JSONP response ===
+      let cleaned = text
+        .replace(/^\/\*(.|\n)*?\*\//, '')     // Remove leading /*O_o*/ or similar comment
+        .trim()
         .replace(/^google\.visualization\.Query\.setResponse\(/, '')
-        .replace(/\);?$/, '');
+        .replace(/\);?$/, '');               // Remove trailing );
 
-      // Safety check
+      // Safety check: make sure we have actual JSON now
       if (cleaned.startsWith('/') || cleaned.startsWith('<') || !cleaned.startsWith('{')) {
         throw new Error('Cleaned response is not valid JSON: ' + cleaned.substring(0, 150));
       }
 
       const data = JSON.parse(cleaned);
+
+      // === Check if we have table data ===
+      if (!data || !data.table) {
+        console.error('Response missing table object:', data);
+        if (data && data.status === 'error') {
+          throw new Error('Google Sheets error: ' + (data.errors?.[0]?.message || 'Unknown'));
+        }
+        throw new Error('No data.table in response');
+      }
+
       const rows = data.table.rows || [];
       console.log(`Loaded ${rows.length} rows from Sheet`);
 
-      const markers = []; // Collect for fitBounds
+      const markers = [];
 
-      rows.forEach(row => {
+      rows.forEach((row, index) => {
+        console.log(`Processing row ${index + 1}:`, row);
+
         const cells = row.c || [];
 
         const timestamp = cells[0]?.v || '';
         const reporter   = cells[1]?.v || 'Anonymous';
         const zone       = cells[3]?.v || 'Unknown';
         const spotDesc   = cells[4]?.v || '';
-        const combinedCoords = cells[5]?.v || ''; // <-- Your Latitude/Longitude column (F)
-        console.log('Row data:', row);
-        console.log('Combined coords from column F:', combinedCoords);
-        console.log('Parsed lat/lng:', lat, lng);
+        const combinedCoords = cells[5]?.v || ''; // ← Your "Latitude/Longitude" column (F)
         const alertType  = cells[6]?.v || '';
         const details    = cells[7]?.v || '';
         const photo      = cells[8]?.v || '';
 
-        // === Parse lat/lng from combined string ===
+        // === Make parsing even more forgiving ===
         let lat = null, lng = null;
-        if (combinedCoords && combinedCoords.includes(',')) {
-          const parts = combinedCoords.split(',').map(s => parseFloat(s.trim()));
-          if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
-            lat = parts[0];
-            lng = parts[1];
-            console.log(`Valid coords parsed: ${lat}, ${lng}`);
+        if (combinedCoords) {
+          // Remove any non-numeric junk except comma, dot, minus, space
+          const cleanedCoords = combinedCoords.replace(/[^\d\.\-,\s]/g, '').trim();
+          console.log('Cleaned coords string:', cleanedCoords);
+
+          if (cleanedCoords.includes(',')) {
+            // Split on comma, take first two parts
+            const parts = cleanedCoords.split(',').slice(0, 2).map(s => parseFloat(s.trim()));
+            if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+              lat = parts[0];
+              lng = parts[1];
+              console.log(`Row ${index + 1} → Parsed: lat=${lat}, lng=${lng}`);
+            } else {
+              console.log(`Row ${index + 1} → Invalid after parse: ${cleanedCoords}`);
+            }
+          } else {
+            console.log(`Row ${index + 1} → No comma found in: ${cleanedCoords}`);
           }
         }
 
-        // === Fallback to zone center ===
+        // === Fallback if parsing failed ===
         if (lat === null || lng === null) {
           const center = zoneCenters[zone] || [-30.85, 30.35];
           lat = center[0];
           lng = center[1];
-          console.log(`Using zone fallback for ${zone}: ${lat}, ${lng}`);
+          console.log(`Row ${index + 1} → Using fallback for "${zone}": [${lat}, ${lng}]`);
         }
 
-        // === Create marker ===
+        // === Create and add marker ===
         const marker = L.marker([lat, lng]).addTo(map);
         marker.bindPopup(`
           <b>${alertType} - ${zone}</b><br>
@@ -121,7 +138,7 @@
         `);
         markers.push(marker);
 
-        // === Add card to list ===
+        // === Add alert card to list ===
         const card = document.createElement('div');
         card.className = 'alert-card';
         card.innerHTML = `
@@ -134,12 +151,13 @@
         document.getElementById('alert-list').appendChild(card);
       });
 
-      // === Zoom to fit all markers ===
+      // === Auto-zoom to fit all markers ===
       if (markers.length > 0) {
         const group = L.featureGroup(markers);
         map.fitBounds(group.getBounds(), { padding: [50, 50] });
+        console.log('Map zoomed to fit markers');
       } else {
-        console.log('No valid locations found to zoom to');
+        console.log('No valid markers created – check row parsing');
       }
     })
     .catch(err => {
@@ -147,7 +165,7 @@
       document.getElementById('alert-list').innerHTML = 
         '<p style="color:red; text-align:center; padding:20px;">' +
         'Error loading alerts: ' + err.message +
-        '<br>Check if the Sheet is published (File → Share → Publish to web) or look in console.</p>';
+        '<br>Check Sheet publish settings (File → Share → Publish to web) or console logs.</p>';
     });
 </script>
 </body>
