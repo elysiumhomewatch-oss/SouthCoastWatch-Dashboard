@@ -2,11 +2,7 @@
 <html lang="en">
 <head>
   <title>CoastLink Community Dashboard v2.4</title>
-  <h2>Submit New Alert</h2>
-<p>Fill in the form below to report a concern. Your alert will appear on the map soon after submission.</p>
-
-<iframe src="https://docs.google.com/forms/d/e/1FAIpQLSfRG4BSZMwlZtPakPJNaiDoR7XFpZUNDOyXRFOSY8lhfK_GtA/viewform?embedded=true" width="640" height="2466" frameborder="0" marginheight="0" marginwidth="0">Loading…</iframe>
-
+ 
 <hr style="margin: 30px 0;">
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -174,5 +170,18 @@
         '<br>Check if the Sheet is published (File → Share → Publish to web) or console logs.</p>';
     });
 </script>
+  <button onclick="document.getElementById('submit-form').scrollIntoView({behavior: 'smooth'})"
+  style="position: fixed; bottom: 20px; right: 20px; background: #1976d2; color: white; border: none; border-radius: 50%; width: 60px; height: 60px; font-size: 24px; cursor: pointer; box-shadow: 0 4px 10px rgba(0,0,0,0.3); z-index: 1000;">
+  +
+</button>
+
+<!-- Hidden form section -->
+<div id="submit-form" style="margin-top: 60px;">
+  <h2>Submit New Alert</h2>
+  <iframe src="https://docs.google.com/forms/d/e/1FAIpQLSfRG4BSZMwlZtPakPJNaiDoR7XFpZUNDOyXRFOSY8lhfK_GtA/viewform?embedded=true" 
+    width="100%" height="800" frameborder="0" marginheight="0" marginwidth="0">
+    Loading…
+  </iframe>
+</div>
 </body>
 </html>
