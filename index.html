@@ -81,6 +81,9 @@
         const zone       = cells[3]?.v || 'Unknown';
         const spotDesc   = cells[4]?.v || '';
         const combinedCoords = cells[5]?.v || ''; // <-- Your Latitude/Longitude column (F)
+        console.log('Row data:', row);
+        console.log('Combined coords from column F:', combinedCoords);
+        console.log('Parsed lat/lng:', lat, lng);
         const alertType  = cells[6]?.v || '';
         const details    = cells[7]?.v || '';
         const photo      = cells[8]?.v || '';
