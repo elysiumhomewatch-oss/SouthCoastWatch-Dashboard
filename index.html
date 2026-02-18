@@ -5,9 +5,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   
-  <!-- Leaflet -->
+  <!-- Leaflet core -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- MarkerCluster plugin -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 
   <style>
     body {
@@ -171,23 +176,41 @@
   };
 
   // ────────────────────────────────────────────────
-  // INITIALIZE MAP
+  // INITIALIZE MAP WITH maxZoom
   // ────────────────────────────────────────────────
-  const map = L.map('map').setView([-30.85, 30.35], 12);
+  const map = L.map('map', {
+    center: [-30.85, 30.35],
+    zoom: 12,
+    maxZoom: 19   // ← THIS FIXES THE CLUSTER ERROR
+  });
+
+  // Cluster group for regular alert markers
+  const markersCluster = L.markerClusterGroup({
+    maxClusterRadius: 40,
+    spiderfyOnMaxZoom: true,
+    showCoverageOnHover: false,
+    zoomToBoundsOnClick: true,
+    animate: true
+  });
+  map.addLayer(markersCluster);
 
   // Basemap layers
   const basemaps = {
     osm: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      maxZoom: 19
     }),
     satellite: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-      attribution: 'Tiles &copy; Esri'
+      attribution: 'Tiles &copy; Esri',
+      maxZoom: 19
     }),
     terrain: L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap contributors, SRTM | &copy; OpenTopoMap'
+      attribution: '&copy; OpenStreetMap contributors, SRTM | &copy; OpenTopoMap',
+      maxZoom: 17
     }),
     dark: L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      attribution: '&copy; OpenStreetMap &copy; CARTO'
+      attribution: '&copy; OpenStreetMap &copy; CARTO',
+      maxZoom: 19
     })
   };
 
@@ -196,7 +219,7 @@
   basemaps[savedBasemap].addTo(map);
   document.getElementById('basemap').value = savedBasemap;
 
-  // Basemap switch handler – stops propagation so it doesn’t trigger map click
+  // Basemap switch handler
   document.getElementById('basemap').addEventListener('change', function(e) {
     e.stopPropagation();
     map.eachLayer(layer => {
@@ -283,8 +306,7 @@
           fillOpacity: 0.85
         });
 
-        // IMPORTANT: This line was missing – markers were created but never added to the map
-        marker.addTo(map);
+        marker.addTo(markersCluster);  // Add to cluster group
 
         marker.bindPopup(`
           <b>${alertTypeRaw} - ${zone}</b><br>
@@ -298,9 +320,9 @@
         markers.push(marker);
       });
 
+      // Fit bounds to clustered markers
       if (markers.length > 0) {
-        const group = L.featureGroup(markers);
-        map.fitBounds(group.getBounds(), { padding: [50, 50] });
+        map.fitBounds(markersCluster.getBounds(), { padding: [50, 50] });
       }
     })
     .catch(err => {
@@ -309,10 +331,9 @@
     });
 
   // ────────────────────────────────────────────────
-  // MAP CLICK → CONFIRM → COPY + TEMP MARKER
+  // MAP CLICK → CONFIRM → COPY + TEMP MARKER (not clustered)
   // ────────────────────────────────────────────────
   map.on('click', function(e) {
-    // Prevent popup when clicking on UI controls
     if (e.originalEvent.target.closest('#legend') || e.originalEvent.target.closest('#map-type-selector') || e.originalEvent.target.tagName === 'SELECT') {
       return;
     }
@@ -353,7 +374,7 @@
             weight: 3,
             opacity: 1,
             fillOpacity: 0.7
-          }).addTo(map);
+          }).addTo(map);  // Temp marker added directly to map (not clustered)
 
           tempMarker.bindPopup(`
             <b>New alert location (temporary)</b><br>
