@@ -27,6 +27,14 @@
     #legend div { padding: 12px; font-size: 0.95em; line-height: 1.5; }
     .legend-item { display: flex; align-items: center; margin-bottom: 6px; }
     .legend-color { display: inline-block; width: 16px; height: 16px; border-radius: 50%; border: 2px solid; margin-right: 8px; }
+    .time-radio-group { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; align-items: center; }
+    .time-radio-group label { cursor: pointer; font-size: 0.95em; }
+    #reset-filters { display: block; margin: 16px auto 0; padding: 10px 20px; background: #757575; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 1em; }
+    #reset-filters:hover { background: #616161; }
+    @media (max-width: 600px) {
+      #type-filters { grid-template-columns: 1fr; }
+      .time-radio-group { align-items: flex-start; }
+    }
   </style>
 </head>
 <body>
@@ -42,18 +50,36 @@
   <!-- Collapsible Filters Panel -->
   <details id="filters" style="max-width: 800px; margin: 0 auto 20px; background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); overflow: hidden;">
     <summary style="padding: 14px; font-weight: bold; background: #e3f2fd; cursor: pointer; font-size: 1.1em; border-radius: 8px;">
-      Filter by Alert Type
+      Filter by Alert Type & Time
     </summary>
     <div style="padding: 16px;">
       <div id="type-filters" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px;">
         <!-- Checkboxes generated here -->
       </div>
+
+      <!-- Time radio buttons -->
+      <div class="time-radio-group">
+        <label><input type="radio" name="timeFilter" value="all" checked> All time</label>
+        <label><input type="radio" name="timeFilter" value="7"> Last 7 days</label>
+        <label><input type="radio" name="timeFilter" value="3"> Last 3 days</label>
+        <label><input type="radio" name="timeFilter" value="1"> Last 24 hours</label>
+      </div>
+
+      <!-- New: Show only active/unresolved -->
+      <div style="margin-top: 16px; text-align: center;">
+        <label style="cursor: pointer; font-size: 0.95em;">
+          <input type="checkbox" id="active-only" checked>
+          Show only active / unresolved alerts
+        </label>
+      </div>
+
+      <!-- Reset button -->
+      <button id="reset-filters">Reset All Filters</button>
     </div>
   </details>
 
   <!-- Map with controls -->
   <div id="map">
-    <!-- Basemap selector -->
     <div id="map-type-selector">
       <label for="basemap">Map Type: </label>
       <select id="basemap">
@@ -64,7 +90,6 @@
       </select>
     </div>
 
-    <!-- Collapsible Legend -->
     <details id="legend">
       <summary>Legend: Alert Types</summary>
       <div>
@@ -110,7 +135,7 @@
     };
 
     // ────────────────────────────────────────────────
-    // ALERT TYPE CONFIG – exact match to form
+    // ALERT TYPE CONFIG
     // ────────────────────────────────────────────────
     const alertTypesConfig = [
       { key: "general",         label: "General/Suspicious",          fill: "#d32f2f", border: "#b71c1c" },
@@ -138,7 +163,30 @@
       spiderfyOnMaxZoom: true,
       showCoverageOnHover: false,
       zoomToBoundsOnClick: true,
-      animate: true
+      animate: true,
+      iconCreateFunction: function(cluster) {
+        // Simple cluster color based on most common type inside
+        const childMarkers = cluster.getAllChildMarkers();
+        const typeCounts = {};
+        childMarkers.forEach(m => {
+          const t = m.options.alertType || 'other';
+          typeCounts[t] = (typeCounts[t] || 0) + 1;
+        });
+        let dominantType = 'other';
+        let maxCount = 0;
+        for (const t in typeCounts) {
+          if (typeCounts[t] > maxCount) {
+            maxCount = typeCounts[t];
+            dominantType = t;
+          }
+        }
+        const color = alertColors[dominantType]?.fill || '#424242';
+        return L.divIcon({
+          html: `<div style="background-color:${color};color:white;width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:bold;border:3px solid #fff;">${cluster.getChildCount()}</div>`,
+          className: 'custom-cluster',
+          iconSize: [40, 40]
+        });
+      }
     });
     map.addLayer(markersCluster);
 
@@ -168,9 +216,11 @@
     // ────────────────────────────────────────────────
     let allMarkers = [];
     let activeTypes = new Set(alertTypesConfig.map(t => t.key));
+    let timeFilterDays = Infinity;
+    let showActiveOnly = true;
 
     // ────────────────────────────────────────────────
-    // CREATE CHECKBOXES
+    // CREATE TYPE CHECKBOXES
     // ────────────────────────────────────────────────
     const typeFiltersDiv = document.getElementById('type-filters');
     alertTypesConfig.forEach(type => {
@@ -202,31 +252,108 @@
     });
 
     // ────────────────────────────────────────────────
-    // APPLY FILTERS (type only – no time slider)
+    // TIME FILTER RADIO BUTTONS + Active only + Reset
+    // ────────────────────────────────────────────────
+    document.querySelectorAll('input[name="timeFilter"]').forEach(radio => {
+      radio.addEventListener('change', function() {
+        if (this.value === 'all') {
+          timeFilterDays = Infinity;
+        } else {
+          timeFilterDays = Number(this.value);
+        }
+        localStorage.setItem('timeFilterDays', timeFilterDays === Infinity ? 'all' : timeFilterDays);
+        applyFilters();
+      });
+
+      const saved = localStorage.getItem('timeFilterDays');
+      if (saved === 'all' && this.value === 'all') this.checked = true;
+      else if (Number(saved) === Number(this.value)) this.checked = true;
+    });
+
+    // Active only checkbox
+    const activeOnlyCheckbox = document.getElementById('active-only');
+    activeOnlyCheckbox.addEventListener('change', function() {
+      showActiveOnly = this.checked;
+      applyFilters();
+    });
+    // Restore saved state
+    const savedActive = localStorage.getItem('showActiveOnly');
+    if (savedActive !== null) {
+      showActiveOnly = savedActive === 'true';
+      activeOnlyCheckbox.checked = showActiveOnly;
+    }
+
+    // Reset button
+    document.getElementById('reset-filters').addEventListener('click', function() {
+      // Reset type checkboxes
+      document.querySelectorAll('.type-checkbox').forEach(cb => {
+        cb.checked = true;
+        activeTypes.add(cb.value);
+      });
+      localStorage.setItem('alertTypeFilters', JSON.stringify([...activeTypes]));
+
+      // Reset time to all
+      document.querySelector('input[name="timeFilter"][value="all"]').checked = true;
+      timeFilterDays = Infinity;
+      localStorage.setItem('timeFilterDays', 'all');
+
+      // Reset active only
+      activeOnlyCheckbox.checked = true;
+      showActiveOnly = true;
+      localStorage.setItem('showActiveOnly', 'true');
+
+      applyFilters();
+    });
+
+    // ────────────────────────────────────────────────
+    // APPLY FILTERS (type + time + active only)
     // ────────────────────────────────────────────────
     function applyFilters() {
       markersCluster.clearLayers();
 
       allMarkers.forEach(marker => {
         const type = (marker.options.alertType || 'other').toLowerCase().trim();
-        const shouldShow = activeTypes.size === 0 || activeTypes.has(type);
-        if (shouldShow) {
+        const timestamp = marker.options.timestamp;
+        const status = (marker.options.status || '').toLowerCase().trim();
+
+        const typeMatch = activeTypes.size === 0 || activeTypes.has(type);
+
+        let timeMatch = true;
+        if (timeFilterDays !== Infinity && timestamp) {
+          const alertTimeMs = parseGoogleDateToMs(timestamp);
+          if (alertTimeMs) {
+            const daysOld = (Date.now() - alertTimeMs) / (1000 * 60 * 60 * 24);
+            timeMatch = daysOld <= timeFilterDays;
+          }
+        }
+
+        const activeMatch = !showActiveOnly || !status || status !== 'resolved';
+
+        if (typeMatch && timeMatch && activeMatch) {
           marker.addTo(markersCluster);
         }
       });
     }
 
     // ────────────────────────────────────────────────
-    // Parse Google Sheets timestamp – fixed + SA format
+    // Parse timestamp to MILLISECONDS (for age calculation)
     // ────────────────────────────────────────────────
-    function parseGoogleDate(str) {
+    function parseGoogleDateToMs(str) {
       if (!str || !str.startsWith('Date(')) return null;
       const match = str.match(/Date\((\d+),(\d+),(\d+),(\d+),(\d+),(\d+)\)/);
       if (!match) return null;
       const [, year, month0, day, hour, min, sec] = match.map(Number);
-      // month0 is 0-based → add 1 for JS Date
       const date = new Date(year, month0, day, hour, min, sec);
-      // South African format: dd/mm/yyyy hh:mm:ss (24-hour)
+      return date.getTime();
+    }
+
+    // ────────────────────────────────────────────────
+    // Parse timestamp to formatted string for popup only
+    // ────────────────────────────────────────────────
+    function parseGoogleDate(str) {
+      const ms = parseGoogleDateToMs(str);
+      if (!ms) return null;
+      const date = new Date(ms);
       const dd = String(date.getDate()).padStart(2, '0');
       const mm = String(date.getMonth() + 1).padStart(2, '0');
       const yyyy = date.getFullYear();
@@ -237,7 +364,7 @@
     }
 
     // ────────────────────────────────────────────────
-    // LOAD MARKERS
+    // LOAD MARKERS – now also store status (column L = index 11)
     // ────────────────────────────────────────────────
     const SHEET_ID = "1Bi9g1mnhkHFqqvNhIwQkikJ2gDkJx5xk5jheyu0kAE4";
     const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=Form%20Responses%201`;
@@ -271,6 +398,7 @@
           let alertType       = alertTypeRaw.toLowerCase().trim();
           const details       = c[7]?.v || '';
           const photo         = c[8]?.v || '';
+          const status        = c[11]?.v || '';  // Column L = index 11 (0-based)
 
           let lat = null, lng = null;
           if (combinedCoords && combinedCoords.includes(',')) {
@@ -319,11 +447,14 @@
             ${spotDesc}<br>
             ${details.substring(0, 150)}${details.length > 150 ? '...' : ''}<br>
             Reported: ${parseGoogleDate(timestamp) || timestamp || 'Unknown'}<br>
+            Status: ${status || 'Unspecified'}<br>
             By: ${reporter}<br>
             ${photo ? `<a href="${photo}" target="_blank">View Photo</a>` : ''}
           `);
 
           marker.options.alertType = finalType;
+          marker.options.timestamp = timestamp;
+          marker.options.status = status;
 
           allMarkers.push(marker);
         });
@@ -344,73 +475,75 @@
         document.body.innerHTML += `<p style="color:red; text-align:center; padding:20px;">Error loading map: ${err.message}</p>`;
       });
 
-  // ────────────────────────────────────────────────
-  // MAP CLICK → CONFIRM → COPY + TEMP MARKER
-  // ────────────────────────────────────────────────
-  map.on('click', function(e) {
-    if (e.originalEvent.target.closest('#legend') || e.originalEvent.target.closest('#map-type-selector') || e.originalEvent.target.tagName === 'SELECT') {
-      return;
-    }
-
-    const lat = e.latlng.lat.toFixed(6);
-    const lng = e.latlng.lng.toFixed(6);
-    const coords = `${lat}, ${lng}`;
-
-    const confirmContent = `
-      <div style="text-align:center; padding:12px; min-width:260px;">
-        <p style="margin:0 0 12px; font-weight:bold;">Report a new alert<br>at this location?</p>
-        <button id="confirmYes" style="background:#4caf50; color:white; border:none; padding:10px 20px; margin:0 8px; border-radius:6px; cursor:pointer;">
-          Yes
-        </button>
-        <button id="confirmNo" style="background:#757575; color:white; border:none; padding:10px 20px; border-radius:6px; cursor:pointer;">
-          No
-        </button>
-      </div>
-    `;
-
-    const confirmPopup = L.popup()
-      .setLatLng(e.latlng)
-      .setContent(confirmContent)
-      .openOn(map);
-
-    setTimeout(() => {
-      const yesBtn = document.getElementById('confirmYes');
-      const noBtn  = document.getElementById('confirmNo');
-
-      if (yesBtn) {
-        yesBtn.onclick = () => {
-          navigator.clipboard.writeText(coords).catch(console.error);
-
-          const tempMarker = L.circleMarker([lat, lng], {
-            radius: 12,
-            fillColor: '#ff1744',
-            color: '#d50000',
-            weight: 3,
-            opacity: 1,
-            fillOpacity: 0.7
-          }).addTo(map);
-
-          tempMarker.bindPopup(`
-            <b>New alert location (temporary)</b><br>
-            ${coords}<br>
-            <small>Paste into form – refresh map after submitting</small>
-          `).openPopup();
-
-          const toast = document.createElement('div');
-          toast.textContent = 'Coordinates copied! Paste into form.';
-          toast.style.cssText = 'position:fixed; bottom:30px; left:50%; transform:translateX(-50%); background:#323232ee; color:white; padding:12px 24px; border-radius:8px; z-index:2000;';
-          document.body.appendChild(toast);
-          setTimeout(() => toast.remove(), 3000);
-
-          window.open("https://docs.google.com/forms/d/e/1FAIpQLSfRG4BSZMwlZtPakPJNaiDoR7XFpZUNDOyXRFOSY8lhfK_GtA/viewform", '_blank');
-
-          map.closePopup(confirmPopup);
-        };
+    // ────────────────────────────────────────────────
+    // MAP CLICK → CONFIRM → COPY + TEMP MARKER
+    // ────────────────────────────────────────────────
+    map.on('click', function(e) {
+      if (e.originalEvent.target.closest('#legend') || e.originalEvent.target.closest('#map-type-selector') || e.originalEvent.target.tagName === 'SELECT') {
+        return;
       }
 
-      if (noBtn) {
-        noBtn.onclick = () => map.closePopup(confirmPopup);
-      }
-    }, 100);
-  });
-</script>
+      const lat = e.latlng.lat.toFixed(6);
+      const lng = e.latlng.lng.toFixed(6);
+      const coords = `${lat}, ${lng}`;
+
+      const confirmContent = `
+        <div style="text-align:center; padding:12px; min-width:260px;">
+          <p style="margin:0 0 12px; font-weight:bold;">Report a new alert<br>at this location?</p>
+          <button id="confirmYes" style="background:#4caf50; color:white; border:none; padding:10px 20px; margin:0 8px; border-radius:6px; cursor:pointer;">
+            Yes
+          </button>
+          <button id="confirmNo" style="background:#757575; color:white; border:none; padding:10px 20px; border-radius:6px; cursor:pointer;">
+            No
+          </button>
+        </div>
+      `;
+
+      const confirmPopup = L.popup()
+        .setLatLng(e.latlng)
+        .setContent(confirmContent)
+        .openOn(map);
+
+      setTimeout(() => {
+        const yesBtn = document.getElementById('confirmYes');
+        const noBtn  = document.getElementById('confirmNo');
+
+        if (yesBtn) {
+          yesBtn.onclick = () => {
+            navigator.clipboard.writeText(coords).catch(console.error);
+
+            const tempMarker = L.circleMarker([lat, lng], {
+              radius: 12,
+              fillColor: '#ff1744',
+              color: '#d50000',
+              weight: 3,
+              opacity: 1,
+              fillOpacity: 0.7
+            }).addTo(map);
+
+            tempMarker.bindPopup(`
+              <b>New alert location (temporary)</b><br>
+              ${coords}<br>
+              <small>Paste into form – refresh map after submitting</small>
+            `).openPopup();
+
+            const toast = document.createElement('div');
+            toast.textContent = 'Coordinates copied! Paste into form.';
+            toast.style.cssText = 'position:fixed; bottom:30px; left:50%; transform:translateX(-50%); background:#323232ee; color:white; padding:12px 24px; border-radius:8px; z-index:2000;';
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+
+            window.open("https://docs.google.com/forms/d/e/1FAIpQLSfRG4BSZMwlZtPakPJNaiDoR7XFpZUNDOyXRFOSY8lhfK_GtA/viewform", '_blank');
+
+            map.closePopup(confirmPopup);
+          };
+        }
+
+        if (noBtn) {
+          noBtn.onclick = () => map.closePopup(confirmPopup);
+        }
+      }, 100);
+    });
+  </script>
+</body>
+</html>
