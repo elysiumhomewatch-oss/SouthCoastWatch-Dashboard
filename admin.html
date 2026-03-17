@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>SouthCoastWatch Admin Dashboard</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <!-- Leaflet core -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #f8f9fa; }
+    h1 { text-align: center; color: #1a3c6d; margin-bottom: 10px; }
+    #map { height: 500px; margin: 20px auto; max-width: 1200px; border: 1px solid #ccc; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+    #alert-table { width: 100%; max-width: 1200px; margin: 20px auto; border-collapse: collapse; background: white; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+    #alert-table th, #alert-table td { padding: 12px; border: 1px solid #ddd; text-align: left; }
+    #alert-table th { background: #e3f2fd; font-weight: bold; }
+    #alert-table tr:nth-child(even) { background: #f9f9f9; }
+    .status-select { padding: 6px; border-radius: 4px; }
+    .logout-btn { background: #d32f2f; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: bold; float: right; }
+    .logout-btn:hover { background: #b71c1c; }
+    #loading { text-align: center; padding: 40px; font-size: 1.2em; color: #555; }
+    #error { color: red; text-align: center; padding: 20px; }
+    #admin-panel { max-width: 1200px; margin: 0 auto; }
+    .filter-controls { margin: 20px auto; text-align: center; max-width: 600px; }
+    .filter-controls label { margin-right: 15px; font-weight: bold; }
+    .filter-controls select { padding: 8px; font-size: 1em; border-radius: 6px; border: 1px solid #ccc; }
+  </style>
+</head>
+<body>
+  <div id="admin-panel">
+    <h1>SouthCoastWatch Admin Dashboard</h1>
+    <button class="logout-btn" id="logout">Logout</button>
+
+    <div id="map"></div>
+
+    <!-- Temporal Filter Dropdown -->
+    <div class="filter-controls">
+      <label for="timeFilter">Show alerts from:</label>
+      <select id="timeFilter">
+        <option value="all" selected>All time</option>
+        <option value="7">Last 7 days</option>
+        <option value="3">Last 3 days</option>
+        <option value="1">Last 24 hours</option>
+      </select>
+    </div>
+
+    <table id="alert-table">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Type</th>
+          <th>Zone</th>
+          <th>Reporter</th>
+          <th>Status</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="alert-table-body"></tbody>
+    </table>
+
+    <div id="loading">Loading alerts...</div>
+    <div id="error" style="display:none;"></div>
+  </div>
+
+  <script>
+    // ────────────────────────────────────────────────
+    // CONFIG
+    // ────────────────────────────────────────────────
+    const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyT27PxzMVY3KxMoiccBTipjQQ-44IYxQJqhuRB1v8tCXu7LUpMpcALeHltcl0RoZaW/exec";
+
+    const storedAuth = JSON.parse(localStorage.getItem('adminAuth') || 'null');
+    if (!storedAuth || !storedAuth.email || !storedAuth.token) {
+      alert("Please log in from the main dashboard first.");
+      window.location.href = "/";
+    }
+
+    // Global variable to store all alerts (for filtering)
+    let allAlerts = [];
+
+    // Alert colors
+    const alertColors = {
+      "general": { fill: "#d32f2f", border: "#b71c1c" },
+      "red wave": { fill: "#1976d2", border: "#0d47a1" },
+      "amber blaze": { fill: "#f57c00", border: "#ef6c00" },
+      "scam": { fill: "#7b1fa2", border: "#4a148c" },
+      "electrical": { fill: "#fbc02d", border: "#f9a825" },
+      "water": { fill: "#42a5f5", border: "#1976d2" },
+      "illegal dumping": { fill: "#795548", border: "#4e342e" },
+      "municipal": { fill: "#757575", border: "#424242" },
+      "other": { fill: "#424242", border: "#212121" }
+    };
+
+    // Zone fallback centers
+    const zoneCenters = {
+      "Highway West": [-30.464248, 30.637618],
+      "Sea East": [-30.90, 30.45],
+      "River North": [-30.82, 30.38],
+      "River South": [-30.88, 30.32],
+      "Central": [-30.85, 30.35],
+      "Unknown": [-30.85, 30.35]
+    };
+
+    // ────────────────────────────────────────────────
+    // INITIALIZE MAP & CLUSTER GROUP
+    // ────────────────────────────────────────────────
+    const map = L.map('map', {
+      center: [-30.85, 30.35],
+      zoom: 12,
+      maxZoom: 19
+    });
+
+    const markersCluster = L.markerClusterGroup({
+      maxClusterRadius: 40,
+      spiderfyOnMaxZoom: true,
+      showCoverageOnHover: false,
+      zoomToBoundsOnClick: true,
+      animate: true,
+      iconCreateFunction: function(cluster) {
+        const childMarkers = cluster.getAllChildMarkers();
+        const typeCounts = {};
+        childMarkers.forEach(m => {
+          const t = m.options.alertType || 'other';
+          typeCounts[t] = (typeCounts[t] || 0) + 1;
+        });
+        let dominantType = 'other';
+        let maxCount = 0;
+        for (const t in typeCounts) {
+          if (typeCounts[t] > maxCount) {
+            maxCount = typeCounts[t];
+            dominantType = t;
+          }
+        }
+        const color = alertColors[dominantType]?.fill || '#424242';
+        return L.divIcon({
+          html: `<div style="background-color:${color};color:white;width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:bold;border:3px solid #fff;">${cluster.getChildCount()}</div>`,
+          className: 'custom-cluster',
+          iconSize: [40, 40]
+        });
+      }
+    });
+    map.addLayer(markersCluster);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      maxZoom: 19
+    }).addTo(map);
+
+    // ────────────────────────────────────────────────
+    // Verify admin credentials server-side
+    // ────────────────────────────────────────────────
+    async function verifyAdminAuth() {
+      const params = new URLSearchParams({
+        action: "check-auth",
+        email: storedAuth.email,
+        token: storedAuth.token
+      });
+
+      try {
+        const response = await fetch(`${SCRIPT_URL}?${params.toString()}`);
+        const data = await response.json();
+
+        console.log("Server auth response:", data);
+
+        if (!data.success || !data.isAdmin) {
+          alert("Session invalid or expired. Please log in again.");
+          localStorage.removeItem('adminAuth');
+          window.location.href = "/";
+          return false;
+        }
+
+        return true;
+      } catch (err) {
+        console.error("Auth check failed", err);
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('error').textContent = "Failed to verify admin access. Try again.";
+        document.getElementById('error').style.display = 'block';
+        return false;
+      }
+    }
+
+    // ────────────────────────────────────────────────
+    // Load alerts once
+    // ────────────────────────────────────────────────
+    async function loadAlerts() {
+      const isValid = await verifyAdminAuth();
+      if (!isValid) return;
+
+      try {
+        const params = new URLSearchParams({
+          action: "get-alerts",
+          email: storedAuth.email,
+          token: storedAuth.token
+        });
+
+        const response = await fetch(`${SCRIPT_URL}?${params.toString()}`);
+        const data = await response.json();
+
+        if (!data.success) {
+          throw new Error(data.error || "Failed to load alerts");
+        }
+
+        // Store all alerts globally
+        allAlerts = data.alerts;
+        console.log("Loaded alerts:", allAlerts.length);
+
+        // Populate table
+        const tbody = document.getElementById('alert-table-body');
+        tbody.innerHTML = '';
+
+        allAlerts.forEach(alert => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td>${alert.timestamp || '—'}</td>
+            <td>${alert.type || 'Other'}</td>
+            <td>${alert.zone || 'Unknown'}</td>
+            <td>${alert.reporter || 'Anonymous'}</td>
+            <td>
+              <select class="status-select" data-id="${alert.row}">
+                <option value="pending" ${alert.status === 'pending' ? 'selected' : ''}>Pending</option>
+                <option value="in-progress" ${alert.status === 'in-progress' ? 'selected' : ''}>In Progress</option>
+                <option value="resolved" ${alert.status === 'resolved' ? 'selected' : ''}>Resolved</option>
+              </select>
+            </td>
+            <td><button class="view-btn" data-lat="${alert.lat || ''}" data-lng="${alert.lng || ''}">View on Map</button></td>
+          `;
+          tbody.appendChild(tr);
+        });
+
+        // Status change handler
+        document.querySelectorAll('.status-select').forEach(select => {
+          select.addEventListener('change', async function() {
+            const row = this.dataset.id;
+            const newStatus = this.value;
+
+            if (confirm(`Change status to "${newStatus}"?`)) {
+              const params = new URLSearchParams({
+                action: "update-status",
+                row: row,
+                status: newStatus,
+                email: storedAuth.email,
+                token: storedAuth.token
+              });
+
+              const response = await fetch(`${SCRIPT_URL}?${params}`);
+              const result = await response.json();
+
+              if (result.success) {
+                alert("Status updated!");
+              } else {
+                alert("Failed to update: " + (result.error || "Unknown error"));
+                this.value = alert.status; // revert
+              }
+            }
+          });
+        });
+
+        // View on map handler
+        document.querySelectorAll('.view-btn').forEach(btn => {
+          btn.addEventListener('click', function() {
+            const lat = parseFloat(this.dataset.lat);
+            const lng = parseFloat(this.dataset.lng);
+            if (!isNaN(lat) && !isNaN(lng)) {
+              map.setView([lat, lng], 16);
+            } else {
+              alert("No location data for this alert.");
+            }
+          });
+        });
+
+        // Add all markers once on load
+        allAlerts.forEach(alert => {
+          let lat = parseFloat(alert.lat);
+          let lng = parseFloat(alert.lng);
+
+          // Fallback if coords missing or invalid
+          if (isNaN(lat) || isNaN(lng)) {
+            const fallback = zoneCenters[alert.zone] || zoneCenters["Unknown"];
+            lat = fallback[0];
+            lng = fallback[1];
+          }
+
+          if (!isNaN(lat) && !isNaN(lng)) {
+            let colorInfo = alertColors["other"];
+            let finalType = "other";
+
+            const typeLower = (alert.type || "").toLowerCase().trim();
+            if (typeLower.includes("general") || typeLower.includes("suspicious")) { colorInfo = alertColors["general"]; finalType = "general"; }
+            else if (typeLower.includes("red wave") || typeLower.includes("flood")) { colorInfo = alertColors["red wave"]; finalType = "red wave"; }
+            else if (typeLower.includes("amber blaze") || typeLower.includes("fire") || typeLower.includes("hazard")) { colorInfo = alertColors["amber blaze"]; finalType = "amber blaze"; }
+            else if (typeLower.includes("scam") || typeLower.includes("doorstep")) { colorInfo = alertColors["scam"]; finalType = "scam"; }
+            else if (typeLower.includes("electrical") || typeLower.includes("fault")) { colorInfo = alertColors["electrical"]; finalType = "electrical"; }
+            else if (typeLower.includes("water") || typeLower.includes("leak") || typeLower.includes("interruption")) { colorInfo = alertColors["water"]; finalType = "water"; }
+            else if (typeLower.includes("illegal dumping")) { colorInfo = alertColors["illegal dumping"]; finalType = "illegal dumping"; }
+            else if (typeLower.includes("municipal") || typeLower.includes("pothole") || typeLower.includes("light") || typeLower.includes("bush")) { colorInfo = alertColors["municipal"]; finalType = "municipal"; }
+
+            const marker = L.circleMarker([lat, lng], {
+              radius: 10,
+              fillColor: colorInfo.fill,
+              color: colorInfo.border,
+              weight: 2,
+              opacity: 1,
+              fillOpacity: 0.85
+            });
+
+            marker.bindPopup(`
+              <b>${alert.type || 'Other'} - ${alert.zone || 'Unknown'}</b><br>
+              Reported: ${alert.timestamp || 'Unknown'}<br>
+              By: ${alert.reporter || 'Anonymous'}<br>
+              Status: ${alert.status || 'Unspecified'}<br>
+              ${alert.photo ? `<a href="${alert.photo}" target="_blank">View Photo</a>` : ''}
+            `);
+
+            marker.options.alertType = finalType;
+            marker.options.timestamp = alert.timestamp || ''; // store for filtering
+            marker.addTo(markersCluster);
+          }
+        });
+
+        // Initial auto-fit
+        setTimeout(() => {
+          const bounds = markersCluster.getBounds();
+          if (markersCluster.getLayers().length > 0 && bounds && bounds.isValid()) {
+            map.fitBounds(bounds, { padding: [50, 50] });
+          } else {
+            map.setView([-30.85, 30.35], 12);
+          }
+        }, 400);
+
+        document.getElementById('loading').style.display = 'none';
+
+      } catch (err) {
+        console.error("Error loading alerts:", err);
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('error').textContent = "Could not load alerts: " + err.message;
+        document.getElementById('error').style.display = 'block';
+      }
+    }
+
+    // ────────────────────────────────────────────────
+    // Temporal filter logic
+    // ────────────────────────────────────────────────
+    let timeFilterDays = Infinity;
+
+    document.getElementById('timeFilter').addEventListener('change', function() {
+      const value = this.value;
+      if (value === 'all') {
+        timeFilterDays = Infinity;
+      } else {
+        timeFilterDays = Number(value);
+      }
+      filterAlerts();
+    });
+
+    // ────────────────────────────────────────────────
+    // Filter alerts in table and map
+    // ────────────────────────────────────────────────
+    function filterAlerts() {
+  // 1. Filter table rows (hide/show <tr>)
+  const tbody = document.getElementById('alert-table-body');
+  const rows = tbody.getElementsByTagName('tr');
+
+  for (let row of rows) {
+    const dateCell = row.cells[0];
+    const timestampStr = dateCell.textContent.trim();
+
+    let showRow = true;
+
+    if (timeFilterDays !== Infinity && timestampStr) {
+      const ms = parseGoogleDateToMs(timestampStr);
+      if (ms) {
+        const daysOld = (Date.now() - ms) / (1000 * 60 * 60 * 24);
+        showRow = daysOld <= timeFilterDays;
+      }
+    }
+
+    row.style.display = showRow ? '' : 'none';
+  }
+
+  // 2. Filter markers: completely clear cluster and re-add only matching ones
+  markersCluster.clearLayers();
+
+  allAlerts.forEach(alert => {
+    let showMarker = true;
+
+    if (timeFilterDays !== Infinity && alert.timestamp) {
+      const ms = parseGoogleDateToMs(alert.timestamp);
+      if (ms) {
+        const daysOld = (Date.now() - ms) / (1000 * 60 * 60 * 24);
+        showMarker = daysOld <= timeFilterDays;
+      }
+    }
+
+    if (showMarker) {
+      // Re-create marker (or find existing one if you stored them)
+      let lat = parseFloat(alert.lat);
+      let lng = parseFloat(alert.lng);
+
+      if (isNaN(lat) || isNaN(lng)) {
+        const fallback = zoneCenters[alert.zone] || zoneCenters["Unknown"];
+        lat = fallback[0];
+        lng = fallback[1];
+      }
+
+      if (!isNaN(lat) && !isNaN(lng)) {
+        let colorInfo = alertColors["other"];
+        let finalType = "other";
+
+        const typeLower = (alert.type || "").toLowerCase().trim();
+        if (typeLower.includes("general") || typeLower.includes("suspicious")) { colorInfo = alertColors["general"]; finalType = "general"; }
+        else if (typeLower.includes("red wave") || typeLower.includes("flood")) { colorInfo = alertColors["red wave"]; finalType = "red wave"; }
+        else if (typeLower.includes("amber blaze") || typeLower.includes("fire") || typeLower.includes("hazard")) { colorInfo = alertColors["amber blaze"]; finalType = "amber blaze"; }
+        else if (typeLower.includes("scam") || typeLower.includes("doorstep")) { colorInfo = alertColors["scam"]; finalType = "scam"; }
+        else if (typeLower.includes("electrical") || typeLower.includes("fault")) { colorInfo = alertColors["electrical"]; finalType = "electrical"; }
+        else if (typeLower.includes("water") || typeLower.includes("leak") || typeLower.includes("interruption")) { colorInfo = alertColors["water"]; finalType = "water"; }
+        else if (typeLower.includes("illegal dumping")) { colorInfo = alertColors["illegal dumping"]; finalType = "illegal dumping"; }
+        else if (typeLower.includes("municipal") || typeLower.includes("pothole") || typeLower.includes("light") || typeLower.includes("bush")) { colorInfo = alertColors["municipal"]; finalType = "municipal"; }
+
+        const marker = L.circleMarker([lat, lng], {
+          radius: 10,
+          fillColor: colorInfo.fill,
+          color: colorInfo.border,
+          weight: 2,
+          opacity: 1,
+          fillOpacity: 0.85
+        });
+
+        marker.bindPopup(`
+          <b>${alert.type || 'Other'} - ${alert.zone || 'Unknown'}</b><br>
+          Reported: ${alert.timestamp || 'Unknown'}<br>
+          By: ${alert.reporter || 'Anonymous'}<br>
+          Status: ${alert.status || 'Unspecified'}<br>
+          ${alert.photo ? `<a href="${alert.photo}" target="_blank">View Photo</a>` : ''}
+        `);
+
+        marker.options.alertType = finalType;
+        marker.options.timestamp = alert.timestamp || '';
+
+        marker.addTo(markersCluster);
+      }
+    }
+  });
+
+  // 3. Auto-fit to currently visible markers
+  setTimeout(() => {
+    const bounds = markersCluster.getBounds();
+    if (markersCluster.getLayers().length > 0 && bounds && bounds.isValid()) {
+      map.fitBounds(bounds, { padding: [50, 50] });
+    } else {
+      map.setView([-30.85, 30.35], 12);
+    }
+  }, 400);
+}
+
+    // Helper: parse timestamp string to milliseconds
+    function parseGoogleDateToMs(str) {
+      if (!str) return null;
+
+      // Try ISO format first (admin app uses this)
+      const isoDate = new Date(str);
+      if (!isNaN(isoDate.getTime())) {
+        return isoDate.getTime();
+      }
+
+      // Fall back to Google Sheets Date(...) format
+      if (str.startsWith('Date(')) {
+        const match = str.match(/Date\((\d+),(\d+),(\d+),(\d+),(\d+),(\d+)\)/);
+        if (match) {
+          const [, year, month0, day, hour, min, sec] = match.map(Number);
+          return new Date(year, month0, day, hour, min, sec).getTime();
+        }
+      }
+
+      console.warn("Unrecognized timestamp:", str);
+      return null;
+    }
+
+    // Logout handler
+    document.getElementById('logout').addEventListener('click', () => {
+      if (confirm("Are you sure you want to logout?")) {
+        localStorage.removeItem('adminAuth');
+        window.location.href = "/";
+      }
+    });
+
+    // Start loading alerts
+    loadAlerts();
+  </script>
+</body>
+</html>
